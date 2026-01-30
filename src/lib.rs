@@ -7,9 +7,9 @@ wit_bindgen::generate!({
 
 use exports::wasmcloud::mcp::mcp_handler::Guest as McpHandler;
 
+mod actions;
 mod config;
 mod mcp;
-mod actions;
 mod types;
 
 use crate::betty_blocks::auth::jwt::validate_token;
@@ -38,7 +38,11 @@ fn handle_request(
         }
         _ => {
             eprintln!("[MCP-COMPONENT] No route matched, returning 405 Method Not Allowed");
-            send_error_response(response_out, 405, "Method Not Allowed. Expected POST to /mcp/{{server-id}}".to_string());
+            send_error_response(
+                response_out,
+                405,
+                "Method Not Allowed. Expected POST to /mcp/{{server-id}}".to_string(),
+            );
         }
     }
 }
@@ -70,7 +74,12 @@ fn handle_mcp_request(
     }
 
     // Step 4: Authenticate request (JWT)
-    let headers = request.headers().entries().into_iter().map(|(k, v)| (k, String::from_utf8_lossy(&v).to_string())).collect::<Vec<_>>();
+    let headers = request
+        .headers()
+        .entries()
+        .into_iter()
+        .map(|(k, v)| (k, String::from_utf8_lossy(&v).to_string()))
+        .collect::<Vec<_>>();
     if validate_token(&headers).is_err() {
         send_error_response(response_out, 401, "Unauthorized".to_string());
         return;
@@ -98,10 +107,12 @@ fn handle_mcp_request(
     }
 }
 
-fn validate_content_type(request: &crate::wasi::http::types::IncomingRequest) -> Result<(), String> {
+fn validate_content_type(
+    request: &crate::wasi::http::types::IncomingRequest,
+) -> Result<(), String> {
     let headers = request.headers();
     let entries = headers.entries();
-    
+
     for (key, value) in entries {
         if key.to_lowercase() == "content-type" {
             let value_str = String::from_utf8_lossy(&value);
@@ -110,14 +121,14 @@ fn validate_content_type(request: &crate::wasi::http::types::IncomingRequest) ->
             }
         }
     }
-    
+
     Err("Content-Type must be application/json".to_string())
 }
 
 fn extract_server_id_from_path(path: &str) -> Result<String, String> {
     // Expected format: /mcp/{server-id}
     let parts: Vec<&str> = path.split('/').collect();
-    
+
     if parts.len() >= 3 && parts[1] == "mcp" {
         // Extract server-id (parts[2]), removing any query parameters
         let server_id = parts[2].split('?').next().unwrap_or(parts[2]);
@@ -131,10 +142,14 @@ fn extract_server_id_from_path(path: &str) -> Result<String, String> {
     }
 }
 
-fn read_request_body(request: &crate::wasi::http::types::IncomingRequest) -> Result<String, String> {
+fn read_request_body(
+    request: &crate::wasi::http::types::IncomingRequest,
+) -> Result<String, String> {
     let body_stream = request.consume().map_err(|_| "Failed to get body stream")?;
-    let input_stream = body_stream.stream().map_err(|_| "Failed to get input stream")?;
-    
+    let input_stream = body_stream
+        .stream()
+        .map_err(|_| "Failed to get input stream")?;
+
     let mut buf = Vec::new();
     loop {
         match input_stream.blocking_read(1024 * 1024) {
@@ -147,14 +162,11 @@ fn read_request_body(request: &crate::wasi::http::types::IncomingRequest) -> Res
             Err(_) => break,
         }
     }
-    
+
     String::from_utf8(buf).map_err(|e| format!("Invalid UTF-8 in body: {}", e))
 }
 
-fn send_success_response(
-    response_out: crate::wasi::http::types::ResponseOutparam,
-    body: String,
-){
+fn send_success_response(response_out: crate::wasi::http::types::ResponseOutparam, body: String) {
     use crate::wasi::http::types::{Fields, OutgoingBody, OutgoingResponse};
 
     let headers = Fields::new();

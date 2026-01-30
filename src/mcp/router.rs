@@ -1,21 +1,17 @@
-use crate::types::*;
-use crate::config;
 use crate::actions;
+use crate::config;
+use crate::types::*;
 use serde_json::{json, Value};
 
 /// Process an MCP JSON-RPC request
 pub fn process_rpc(server_id: &str, body: &str) -> Result<String, String> {
     // Parse JSON-RPC request
-    let request: JsonRpcRequest = serde_json::from_str(body)
-        .map_err(|e| format!("Invalid JSON-RPC request: {}", e))?;
+    let request: JsonRpcRequest =
+        serde_json::from_str(body).map_err(|e| format!("Invalid JSON-RPC request: {}", e))?;
 
     // Validate JSON-RPC version
     if request.jsonrpc != "2.0" {
-        return create_error_response(
-            request.id,
-            -32600,
-            "Invalid Request: jsonrpc must be '2.0'",
-        );
+        return create_error_response(request.id, -32600, "Invalid Request: jsonrpc must be '2.0'");
     }
 
     // Load server configuration
@@ -48,10 +44,7 @@ fn handle_initialize(params: &Value) -> Result<Value, String> {
         .and_then(|v| v.as_str())
         .unwrap_or("2024-11-05");
 
-    let capabilities = params
-        .get("capabilities")
-        .cloned()
-        .unwrap_or(json!({}));
+    let capabilities = params.get("capabilities").cloned().unwrap_or(json!({}));
 
     Ok(json!({
         "protocolVersion": protocol_version,
@@ -65,11 +58,7 @@ fn handle_initialize(params: &Value) -> Result<Value, String> {
 
 fn handle_list_tools(server_config: &McpServerConfig) -> Result<Value, String> {
     // Convert ToolWithAction to Tool (removing action-id from response)
-    let tools: Vec<Tool> = server_config
-        .tools
-        .iter()
-        .map(|t| t.tool.clone())
-        .collect();
+    let tools: Vec<Tool> = server_config.tools.iter().map(|t| t.tool.clone()).collect();
 
     let result = ListToolsResult {
         tools,
@@ -96,10 +85,8 @@ fn handle_call_tool(params: &Value, server_config: &McpServerConfig) -> Result<V
     validate_arguments(&call_params.arguments, &tool_with_action.tool.input_schema)?;
 
     // Execute the mapped action
-    let action_result = actions::execute_mapped_action(
-        &tool_with_action.action_id,
-        &call_params.arguments,
-    )?;
+    let action_result =
+        actions::execute_mapped_action(&tool_with_action.action_id, &call_params.arguments)?;
 
     // Parse action output into MCP content
     let content = actions::parse_action_output(&action_result)?;
@@ -115,26 +102,313 @@ fn handle_call_tool(params: &Value, server_config: &McpServerConfig) -> Result<V
 }
 
 fn validate_arguments(arguments: &Value, schema: &Value) -> Result<(), String> {
-    // Basic validation: check required fields
-    if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
-        let args_obj = arguments.as_object()
-            .ok_or("Arguments must be an object")?;
+    // Arguments must be an object
+    let args_obj = arguments.as_object().ok_or("Arguments must be an object")?;
 
-        for req_field in required {
-            let field_name = req_field.as_str()
+    // Get schema properties and required fields
+    let properties = schema.get("properties").and_then(|p| p.as_object());
+    let required = schema.get("required").and_then(|r| r.as_array());
+
+    // 1. Check required fields
+    if let Some(required_fields) = required {
+        for req_field in required_fields {
+            let field_name = req_field
+                .as_str()
                 .ok_or("Required field name must be a string")?;
-            
+
             if !args_obj.contains_key(field_name) {
                 return Err(format!("Missing required argument: {}", field_name));
             }
         }
     }
 
-    // Additional validation could be added here:
-    // - Type checking against schema properties
-    // - Enum validation
-    // - Format validation
-    // For now, we do basic required field checking
+    // 2. Validate each provided argument against its schema
+    if let Some(props) = properties {
+        for (arg_name, arg_value) in args_obj {
+            if let Some(prop_schema) = props.get(arg_name) {
+                validate_value(arg_name, arg_value, prop_schema)?;
+            }
+            // Note: We allow additional properties not in schema (permissive approach)
+            // If you want strict validation, add an error here for unknown properties
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_value(field_name: &str, value: &Value, schema: &Value) -> Result<(), String> {
+    // Get the expected type
+    let expected_type = schema.get("type").and_then(|t| t.as_str());
+
+    match expected_type {
+        Some("string") => validate_string(field_name, value, schema)?,
+        Some("number") => validate_number(field_name, value, schema)?,
+        Some("integer") => validate_integer(field_name, value, schema)?,
+        Some("boolean") => validate_boolean(field_name, value)?,
+        Some("array") => validate_array(field_name, value, schema)?,
+        Some("object") => validate_object(field_name, value, schema)?,
+        Some("null") => {
+            if !value.is_null() {
+                return Err(format!("Argument '{}' must be null", field_name));
+            }
+        }
+        Some(unknown) => {
+            return Err(format!(
+                "Unknown type '{}' in schema for '{}'",
+                unknown, field_name
+            ));
+        }
+        None => {
+            // No type specified, accept any value
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_string(field_name: &str, value: &Value, schema: &Value) -> Result<(), String> {
+    let string_val = value
+        .as_str()
+        .ok_or_else(|| format!("Argument '{}' must be a string", field_name))?;
+
+    // Check enum values
+    if let Some(enum_values) = schema.get("enum").and_then(|e| e.as_array()) {
+        let valid_values: Vec<&str> = enum_values.iter().filter_map(|v| v.as_str()).collect();
+
+        if !valid_values.contains(&string_val) {
+            return Err(format!(
+                "Argument '{}' must be one of: {}. Got: '{}'",
+                field_name,
+                valid_values.join(", "),
+                string_val
+            ));
+        }
+    }
+
+    // Check minLength
+    if let Some(min_len) = schema.get("minLength").and_then(|m| m.as_u64()) {
+        if (string_val.len() as u64) < min_len {
+            return Err(format!(
+                "Argument '{}' must be at least {} characters long",
+                field_name, min_len
+            ));
+        }
+    }
+
+    // Check maxLength
+    if let Some(max_len) = schema.get("maxLength").and_then(|m| m.as_u64()) {
+        if (string_val.len() as u64) > max_len {
+            return Err(format!(
+                "Argument '{}' must be at most {} characters long",
+                field_name, max_len
+            ));
+        }
+    }
+
+    // Check pattern (basic regex - could be enhanced)
+    if let Some(pattern) = schema.get("pattern").and_then(|p| p.as_str()) {
+        // Note: Full regex validation would require the `regex` crate
+        // For now, we just note the pattern but don't validate it
+        eprintln!(
+            "Warning: Pattern validation for '{}' not implemented: {}",
+            field_name, pattern
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_number(field_name: &str, value: &Value, schema: &Value) -> Result<(), String> {
+    let num_val = value
+        .as_f64()
+        .ok_or_else(|| format!("Argument '{}' must be a number", field_name))?;
+
+    // Check minimum
+    if let Some(minimum) = schema.get("minimum").and_then(|m| m.as_f64()) {
+        if num_val < minimum {
+            return Err(format!("Argument '{}' must be >= {}", field_name, minimum));
+        }
+    }
+
+    // Check maximum
+    if let Some(maximum) = schema.get("maximum").and_then(|m| m.as_f64()) {
+        if num_val > maximum {
+            return Err(format!("Argument '{}' must be <= {}", field_name, maximum));
+        }
+    }
+
+    // Check exclusiveMinimum
+    if let Some(exclusive_min) = schema.get("exclusiveMinimum").and_then(|m| m.as_f64()) {
+        if num_val <= exclusive_min {
+            return Err(format!(
+                "Argument '{}' must be > {}",
+                field_name, exclusive_min
+            ));
+        }
+    }
+
+    // Check exclusiveMaximum
+    if let Some(exclusive_max) = schema.get("exclusiveMaximum").and_then(|m| m.as_f64()) {
+        if num_val >= exclusive_max {
+            return Err(format!(
+                "Argument '{}' must be < {}",
+                field_name, exclusive_max
+            ));
+        }
+    }
+
+    // Check multipleOf
+    if let Some(multiple_of) = schema.get("multipleOf").and_then(|m| m.as_f64()) {
+        if multiple_of != 0.0 {
+            let remainder = num_val % multiple_of;
+            if remainder.abs() > f64::EPSILON {
+                return Err(format!(
+                    "Argument '{}' must be a multiple of {}",
+                    field_name, multiple_of
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_integer(field_name: &str, value: &Value, schema: &Value) -> Result<(), String> {
+    let int_val = value
+        .as_i64()
+        .ok_or_else(|| format!("Argument '{}' must be an integer", field_name))?;
+
+    // Check minimum
+    if let Some(minimum) = schema.get("minimum").and_then(|m| m.as_i64()) {
+        if int_val < minimum {
+            return Err(format!("Argument '{}' must be >= {}", field_name, minimum));
+        }
+    }
+
+    // Check maximum
+    if let Some(maximum) = schema.get("maximum").and_then(|m| m.as_i64()) {
+        if int_val > maximum {
+            return Err(format!("Argument '{}' must be <= {}", field_name, maximum));
+        }
+    }
+
+    // Check multipleOf
+    if let Some(multiple_of) = schema.get("multipleOf").and_then(|m| m.as_i64()) {
+        if multiple_of != 0 && int_val % multiple_of != 0 {
+            return Err(format!(
+                "Argument '{}' must be a multiple of {}",
+                field_name, multiple_of
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_boolean(field_name: &str, value: &Value) -> Result<(), String> {
+    if !value.is_boolean() {
+        return Err(format!("Argument '{}' must be a boolean", field_name));
+    }
+    Ok(())
+}
+
+fn validate_array(field_name: &str, value: &Value, schema: &Value) -> Result<(), String> {
+    let array_val = value
+        .as_array()
+        .ok_or_else(|| format!("Argument '{}' must be an array", field_name))?;
+
+    // Check minItems
+    if let Some(min_items) = schema.get("minItems").and_then(|m| m.as_u64()) {
+        if (array_val.len() as u64) < min_items {
+            return Err(format!(
+                "Argument '{}' must have at least {} items",
+                field_name, min_items
+            ));
+        }
+    }
+
+    // Check maxItems
+    if let Some(max_items) = schema.get("maxItems").and_then(|m| m.as_u64()) {
+        if (array_val.len() as u64) > max_items {
+            return Err(format!(
+                "Argument '{}' must have at most {} items",
+                field_name, max_items
+            ));
+        }
+    }
+
+    // Check uniqueItems
+    if let Some(true) = schema.get("uniqueItems").and_then(|u| u.as_bool()) {
+        let mut seen = std::collections::HashSet::new();
+        for item in array_val {
+            let item_str = serde_json::to_string(item).unwrap_or_default();
+            if !seen.insert(item_str) {
+                return Err(format!("Argument '{}' must have unique items", field_name));
+            }
+        }
+    }
+
+    // Validate items against schema if provided
+    if let Some(items_schema) = schema.get("items") {
+        for (i, item) in array_val.iter().enumerate() {
+            let item_field_name = format!("{}[{}]", field_name, i);
+            validate_value(&item_field_name, item, items_schema)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_object(field_name: &str, value: &Value, schema: &Value) -> Result<(), String> {
+    let obj_val = value
+        .as_object()
+        .ok_or_else(|| format!("Argument '{}' must be an object", field_name))?;
+
+    // Check minProperties
+    if let Some(min_props) = schema.get("minProperties").and_then(|m| m.as_u64()) {
+        if (obj_val.len() as u64) < min_props {
+            return Err(format!(
+                "Argument '{}' must have at least {} properties",
+                field_name, min_props
+            ));
+        }
+    }
+
+    // Check maxProperties
+    if let Some(max_props) = schema.get("maxProperties").and_then(|m| m.as_u64()) {
+        if (obj_val.len() as u64) > max_props {
+            return Err(format!(
+                "Argument '{}' must have at most {} properties",
+                field_name, max_props
+            ));
+        }
+    }
+
+    // Check required properties defined in the object's schema
+    if let Some(required_fields) = schema.get("required").and_then(|r| r.as_array()) {
+        for req_field in required_fields {
+            let req_field_name = req_field
+                .as_str()
+                .ok_or("Required field name must be a string")?;
+
+            if !obj_val.contains_key(req_field_name) {
+                return Err(format!(
+                    "Object '{}' is missing required property '{}'",
+                    field_name, req_field_name
+                ));
+            }
+        }
+    }
+
+    // Recursively validate nested properties if schema is provided
+    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+        for (prop_name, prop_value) in obj_val {
+            if let Some(prop_schema) = properties.get(prop_name) {
+                let nested_field_name = format!("{}.{}", field_name, prop_name);
+                validate_value(&nested_field_name, prop_value, prop_schema)?;
+            }
+        }
+    }
 
     Ok(())
 }
@@ -147,8 +421,7 @@ fn create_success_response(id: Option<Value>, result: Value) -> Result<String, S
         error: None,
     };
 
-    serde_json::to_string(&response)
-        .map_err(|e| format!("Failed to serialize response: {}", e))
+    serde_json::to_string(&response).map_err(|e| format!("Failed to serialize response: {}", e))
 }
 
 fn create_error_response(id: Option<Value>, code: i32, message: &str) -> Result<String, String> {
@@ -172,7 +445,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_validate_arguments() {
+    fn test_validate_arguments_required_fields() {
         let schema = json!({
             "type": "object",
             "properties": {
@@ -194,5 +467,201 @@ mod tests {
             "unit": "celsius"
         });
         assert!(validate_arguments(&invalid_args, &schema).is_err());
+    }
+
+    #[test]
+    fn test_validate_string_enum() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "unit": {
+                    "type": "string",
+                    "enum": ["celsius", "fahrenheit"]
+                }
+            }
+        });
+
+        // Valid enum value
+        let valid = json!({ "unit": "celsius" });
+        assert!(validate_arguments(&valid, &schema).is_ok());
+
+        // Invalid enum value
+        let invalid = json!({ "unit": "kelvin" });
+        assert!(validate_arguments(&invalid, &schema).is_err());
+    }
+
+    #[test]
+    fn test_validate_string_length() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 10
+                }
+            }
+        });
+
+        // Valid length
+        let valid = json!({ "name": "Alice" });
+        assert!(validate_arguments(&valid, &schema).is_ok());
+
+        // Too short
+        let too_short = json!({ "name": "Al" });
+        assert!(validate_arguments(&too_short, &schema).is_err());
+
+        // Too long
+        let too_long = json!({ "name": "Alexander the Great" });
+        assert!(validate_arguments(&too_long, &schema).is_err());
+    }
+
+    #[test]
+    fn test_validate_number_range() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "age": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 120
+                }
+            }
+        });
+
+        // Valid range
+        let valid = json!({ "age": 25 });
+        assert!(validate_arguments(&valid, &schema).is_ok());
+
+        // Below minimum
+        let below = json!({ "age": -1 });
+        assert!(validate_arguments(&below, &schema).is_err());
+
+        // Above maximum
+        let above = json!({ "age": 150 });
+        assert!(validate_arguments(&above, &schema).is_err());
+    }
+
+    #[test]
+    fn test_validate_integer() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                }
+            }
+        });
+
+        // Valid integer
+        let valid = json!({ "count": 42 });
+        assert!(validate_arguments(&valid, &schema).is_ok());
+
+        // Float when integer expected
+        let float_val = json!({ "count": 42.5 });
+        assert!(validate_arguments(&float_val, &schema).is_err());
+    }
+
+    #[test]
+    fn test_validate_boolean() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "active": { "type": "boolean" }
+            }
+        });
+
+        // Valid boolean
+        let valid = json!({ "active": true });
+        assert!(validate_arguments(&valid, &schema).is_ok());
+
+        // String when boolean expected
+        let invalid = json!({ "active": "true" });
+        assert!(validate_arguments(&invalid, &schema).is_err());
+    }
+
+    #[test]
+    fn test_validate_array() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "items": { "type": "string" }
+                }
+            }
+        });
+
+        // Valid array
+        let valid = json!({ "tags": ["rust", "wasm"] });
+        assert!(validate_arguments(&valid, &schema).is_ok());
+
+        // Empty array (below minItems)
+        let empty = json!({ "tags": [] });
+        assert!(validate_arguments(&empty, &schema).is_err());
+
+        // Too many items
+        let too_many = json!({ "tags": ["a", "b", "c", "d", "e", "f"] });
+        assert!(validate_arguments(&too_many, &schema).is_err());
+
+        // Invalid item type
+        let wrong_type = json!({ "tags": ["valid", 123] });
+        assert!(validate_arguments(&wrong_type, &schema).is_err());
+    }
+
+    #[test]
+    fn test_validate_nested_object() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "user": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "age": { "type": "integer" }
+                    },
+                    "required": ["name"]
+                }
+            }
+        });
+
+        // Valid nested object
+        let valid = json!({
+            "user": {
+                "name": "Alice",
+                "age": 30
+            }
+        });
+        assert!(validate_arguments(&valid, &schema).is_ok());
+
+        // Missing required nested field
+        let invalid = json!({
+            "user": {
+                "age": 30
+            }
+        });
+        assert!(validate_arguments(&invalid, &schema).is_err());
+    }
+
+    #[test]
+    fn test_validate_type_mismatch() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string" },
+                "count": { "type": "number" }
+            }
+        });
+
+        // Number where string expected
+        let wrong_type = json!({
+            "name": 123,
+            "count": 5
+        });
+        assert!(validate_arguments(&wrong_type, &schema).is_err());
     }
 }

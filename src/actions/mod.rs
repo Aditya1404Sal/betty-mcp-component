@@ -4,8 +4,8 @@ use serde_json::{json, Value};
 /// Execute a wasmCloud action by its ID
 pub fn execute_mapped_action(action_id: &str, arguments: &Value) -> Result<ActionResponse, String> {
     // TODO: Replace with actual betty:actions/executor WIT import when available
-    // For now, use a mock implementation
-    
+    // For now, use httpbin to simulate action execution
+
     // This would eventually call the WIT-imported function:
     // use crate::betty::actions::executor;
     // let payload = ActionPayload {
@@ -13,8 +13,8 @@ pub fn execute_mapped_action(action_id: &str, arguments: &Value) -> Result<Actio
     //     arguments: arguments.clone(),
     // };
     // let result = executor::perform_action(&serde_json::to_string(&payload).unwrap());
-    
-    mock_action_execution(action_id, arguments)
+    // We mock it for now
+    temp_execute_via_httpbin(action_id, arguments)
 }
 
 /// Parse action response into MCP content blocks
@@ -48,8 +48,7 @@ pub fn parse_action_output(action_response: &ActionResponse) -> Result<Vec<Conte
             // Otherwise, serialize the entire data as JSON text
             else {
                 Ok(vec![ContentBlock::Text {
-                    text: serde_json::to_string_pretty(data)
-                        .unwrap_or_else(|_| data.to_string()),
+                    text: serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string()),
                 }])
             }
         }
@@ -61,7 +60,7 @@ pub fn parse_action_output(action_response: &ActionResponse) -> Result<Vec<Conte
 
 fn parse_content_array(content_array: &[Value]) -> Result<Vec<ContentBlock>, String> {
     let mut blocks = Vec::new();
-    
+
     for item in content_array {
         if let Some(content_type) = item.get("type").and_then(|t| t.as_str()) {
             match content_type {
@@ -87,88 +86,94 @@ fn parse_content_array(content_array: &[Value]) -> Result<Vec<ContentBlock>, Str
             }
         }
     }
-    
+
     Ok(blocks)
 }
 
-// Mock action execution for testing
-fn mock_action_execution(action_id: &str, arguments: &Value) -> Result<ActionResponse, String> {
-    match action_id {
-        "action-weather-get" => {
-            let location = arguments.get("location")
-                .and_then(|l| l.as_str())
-                .ok_or("Missing location")?;
-            
-            let unit = arguments.get("unit")
-                .and_then(|u| u.as_str())
-                .unwrap_or("celsius");
-            
-            let temp = if unit == "fahrenheit" { 72 } else { 22 };
-            
-            Ok(ActionResponse {
-                success: true,
-                data: Some(json!({
-                    "text": format!(
-                        "Current weather in {}: {}°{}, partly cloudy with light winds",
-                        location,
-                        temp,
-                        if unit == "fahrenheit" { "F" } else { "C" }
-                    )
-                })),
-                error: None,
-            })
-        }
-        "action-calc-add" => {
-            let a = arguments.get("a")
-                .and_then(|v| v.as_f64())
-                .ok_or("Missing or invalid parameter 'a'")?;
-            
-            let b = arguments.get("b")
-                .and_then(|v| v.as_f64())
-                .ok_or("Missing or invalid parameter 'b'")?;
-            
-            let result = a + b;
-            
-            Ok(ActionResponse {
-                success: true,
-                data: Some(json!({
-                    "text": format!("{} + {} = {}", a, b, result)
-                })),
-                error: None,
-            })
-        }
-        _ => {
-            Err(format!("Action '{}' not implemented", action_id))
-        }
+/// Execute action via httpbin (temporary mock using real HTTP)
+fn temp_execute_via_httpbin(action_id: &str, arguments: &Value) -> Result<ActionResponse, String> {
+    use std::time::Duration;
+    use waki::Client;
+
+    eprintln!("[ACTION] Executing action '{}' via httpbin", action_id);
+    eprintln!(
+        "[ACTION] Arguments: {}",
+        serde_json::to_string_pretty(arguments).unwrap_or_default()
+    );
+
+    // Prepare the payload to send to httpbin
+    let payload = json!({
+        "action_id": action_id,
+        "arguments": arguments
+    });
+
+    let payload_str = serde_json::to_string(&payload)
+        .map_err(|e| format!("Failed to serialize payload: {}", e))?;
+
+    eprintln!("[ACTION] Sending request to httpbin.org/post");
+
+    // Make HTTP request to httpbin
+    let resp = Client::new()
+        .post("https://httpbin.org/post")
+        .connect_timeout(Duration::from_secs(10))
+        .headers([("Content-Type", "application/json")])
+        .body(payload_str.as_bytes())
+        .send()
+        .map_err(|e| format!("HTTP request failed: {:?}", e))?;
+
+    eprintln!(
+        "[ACTION] Received response with status: {}",
+        resp.status_code()
+    );
+
+    // Check status code
+    if resp.status_code() != 200 {
+        return Err(format!(
+            "HTTP request failed with status: {}",
+            resp.status_code()
+        ));
     }
+
+    // Parse the response body
+    let body = resp
+        .body()
+        .map_err(|e| format!("Failed to read response body: {:?}", e))?;
+
+    let body_str = String::from_utf8(body.to_vec())
+        .map_err(|e| format!("Response body is not valid UTF-8: {}", e))?;
+
+    eprintln!("[ACTION] Response body: {}", body_str);
+
+    // Parse httpbin response (it echoes back our JSON in the "json" field)
+    let httpbin_response: Value = serde_json::from_str(&body_str)
+        .map_err(|e| format!("Failed to parse response JSON: {}", e))?;
+
+    // Extract our original payload from httpbin's response
+    let echoed_data = httpbin_response
+        .get("json")
+        .ok_or("httpbin response missing 'json' field")?;
+
+    // Create a success response with the echoed data
+    // In real implementation, this would be the actual action result
+    let result_text = format!(
+        "Action '{}' executed successfully via httpbin. Echoed arguments: {}",
+        action_id,
+        serde_json::to_string_pretty(&echoed_data.get("arguments")).unwrap_or_default()
+    );
+
+    Ok(ActionResponse {
+        success: true,
+        data: Some(json!({
+            "text": result_text,
+            "echoed_payload": echoed_data
+        })),
+        error: None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_mock_weather_action() {
-        let args = json!({
-            "location": "Amsterdam",
-            "unit": "celsius"
-        });
-        
-        let result = mock_action_execution("action-weather-get", &args).unwrap();
-        assert!(result.success);
-        assert!(result.data.is_some());
-    }
-
-    #[test]
-    fn test_mock_calculator_action() {
-        let args = json!({
-            "a": 5,
-            "b": 3
-        });
-        
-        let result = mock_action_execution("action-calc-add", &args).unwrap();
-        assert!(result.success);
-    }
 
     #[test]
     fn test_parse_text_output() {
@@ -179,8 +184,26 @@ mod tests {
             })),
             error: None,
         };
-        
+
         let content = parse_action_output(&response).unwrap();
         assert_eq!(content.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_error_output() {
+        let response = ActionResponse {
+            success: false,
+            data: None,
+            error: Some("Something went wrong".to_string()),
+        };
+
+        let content = parse_action_output(&response).unwrap();
+        assert_eq!(content.len(), 1);
+        match &content[0] {
+            ContentBlock::Text { text } => {
+                assert!(text.contains("Error:"));
+            }
+            _ => panic!("Expected text content block"),
+        }
     }
 }
