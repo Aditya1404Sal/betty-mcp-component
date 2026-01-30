@@ -67,7 +67,7 @@ fn handle_mcp_request(
         return;
     }
 
-    // Step 3: Validate Content-Type
+    // Step 3: Validate Content-Type as application/json
     if let Err(e) = validate_content_type(&request) {
         send_error_response(response_out, 400, e);
         return;
@@ -81,6 +81,7 @@ fn handle_mcp_request(
         .map(|(k, v)| (k, String::from_utf8_lossy(&v).to_string()))
         .collect::<Vec<_>>();
     if validate_token(&headers).is_err() {
+        // `validate_token` belongs to betty-blocks:auth/jwt
         send_error_response(response_out, 401, "Unauthorized".to_string());
         return;
     }
@@ -96,12 +97,22 @@ fn handle_mcp_request(
 
     // Step 6: Process MCP RPC request (includes JSON-RPC validation)
     match mcp::router::process_rpc(&server_id, &body) {
-        Ok(result) => send_success_response(response_out, result),
+        Ok(result) => {
+            // Serialize typed JsonrpcResponse into a string for the HTTP response
+            match serde_json::to_string(&result) {
+                Ok(body_str) => send_success_response(response_out, body_str),
+                Err(e) => {
+                    eprintln!("Failed to serialize JsonrpcResponse: {}", e);
+                    send_error_response(response_out, 500, "Internal server error".to_string());
+                }
+            }
+        }
         Err(e) => {
-            if e.contains("Invalid JSON-RPC") {
+            // Inspect the error message field on the typed error response
+            if e.error.message.contains("Invalid JSON-RPC") {
                 send_error_response(response_out, 500, "Invalid JSON-RPC request".to_string());
             } else {
-                send_error_response(response_out, 400, e);
+                send_error_response(response_out, 400, e.error.message.clone());
             }
         }
     }
@@ -151,16 +162,11 @@ fn read_request_body(
         .map_err(|_| "Failed to get input stream")?;
 
     let mut buf = Vec::new();
-    loop {
-        match input_stream.blocking_read(1024 * 1024) {
-            Ok(chunk) => {
-                if chunk.is_empty() {
-                    break;
-                }
-                buf.extend_from_slice(&chunk);
-            }
-            Err(_) => break,
+    while let Ok(chunk) = input_stream.blocking_read(1024 * 1024) {
+        if chunk.is_empty() {
+            break;
         }
+        buf.extend_from_slice(&chunk);
     }
 
     String::from_utf8(buf).map_err(|e| format!("Invalid UTF-8 in body: {}", e))
@@ -170,7 +176,7 @@ fn send_success_response(response_out: crate::wasi::http::types::ResponseOutpara
     use crate::wasi::http::types::{Fields, OutgoingBody, OutgoingResponse};
 
     let headers = Fields::new();
-    let _ = headers.set(&"content-type".to_string(), &[b"application/json".to_vec()]);
+    let _ = headers.set("content-type", &[b"application/json".to_vec()]);
 
     let response = OutgoingResponse::new(headers);
     if let Err(e) = response.set_status_code(200) {
@@ -222,7 +228,7 @@ fn send_error_response(
     });
 
     let headers = Fields::new();
-    let _ = headers.set(&"content-type".to_string(), &[b"application/json".to_vec()]);
+    let _ = headers.set("content-type", &[b"application/json".to_vec()]);
 
     let response = OutgoingResponse::new(headers);
     if let Err(e) = response.set_status_code(status) {

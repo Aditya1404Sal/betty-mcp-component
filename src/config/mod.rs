@@ -1,6 +1,5 @@
 use crate::types::{McpServerConfig, McpServersConfig};
 use crate::wasi::config::store::get_all;
-use serde_json;
 
 /// Check if a server ID exists in the configuration
 pub fn check_server_id_exists(server_id: &str) -> Result<(), String> {

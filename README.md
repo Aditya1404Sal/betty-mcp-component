@@ -1,4 +1,5 @@
-# HTTP-MCP Provider
+# WIP : This Component is **NOT** Ready
+## HTTP-MCP Provider
 
 A wasmCloud component that bridges Model Context Protocol (MCP) clients with internal wasmCloud actions.
 

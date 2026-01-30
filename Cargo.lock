@@ -30,6 +30,7 @@ checksum = "ace50bade8e6234aa140d9a2f552bbee1db4d353f69b8217bc503490fc1a9f26"
 name = "betty-mcp-component"
 version = "0.1.0"
 dependencies = [
+ "rust-mcp-schema",
  "serde",
  "serde_json",
  "waki",
@@ -288,6 +289,16 @@ name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+
+[[package]]
+name = "rust-mcp-schema"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ed324cdee4b735926a1eaa7741b63a5d103ee08bbe0d3701398279b0c3bf3ce"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "ryu"
