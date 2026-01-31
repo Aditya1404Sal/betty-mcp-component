@@ -1,11 +1,6 @@
+use rust_mcp_schema::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-// Re-export canonical MCP types from rust-mcp-schema (2024_11_05 schema)
-pub use rust_mcp_schema::mcp_2025_11_25::{
-    CallToolRequestParams as CallToolParams, CallToolResult, JsonrpcErrorResponse, JsonrpcRequest,
-    JsonrpcResponse, ListToolsResult, Tool, ToolInputSchema, JSONRPC_VERSION,
-};
 
 // ============ MCP Tool Types ============
 

@@ -96,7 +96,7 @@ fn handle_mcp_request(
     };
 
     // Step 6: Process MCP RPC request (includes JSON-RPC validation)
-    match mcp::router::process_rpc(&server_id, &body) {
+    match mcp::process_rpc(&server_id, &body) {
         Ok(result) => {
             // Serialize typed JsonrpcResponse into a string for the HTTP response
             match serde_json::to_string(&result) {
