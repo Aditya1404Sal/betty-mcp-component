@@ -1,0 +1,11 @@
+name = "http-mcp-minimal"
+version = "0.1.0"
+language = "rust"
+type = "component"
+
+[component]
+wit_world = "mcp"
+wasm_target = "wasm32-wasip2"
+
+[overrides]
+"betty-blocks:auth" = { path = "../auth-component/wit/auth/auth.wit" }
