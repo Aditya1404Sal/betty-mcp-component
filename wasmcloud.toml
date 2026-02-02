@@ -8,4 +8,7 @@ wit_world = "mcp"
 wasm_target = "wasm32-wasip2"
 
 [overrides]
-"betty-blocks:auth" = { path = "../auth-component/wit/auth/auth.wit" }
+"betty-blocks:auth" = { path = "../betty-auth-component/wit/auth/auth.wit" }
+"betty-blocks:actions" = { path = "../wasm-base-components/wit/actions.wit"}
+"betty-blocks:types" = { path = "../wasm-base-components/wit/types.wit"}
+

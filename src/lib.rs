@@ -5,7 +5,7 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-use exports::wasmcloud::mcp::mcp_handler::Guest as McpHandler;
+use exports::wasi::http::incoming_handler::Guest as McpHandler;
 
 mod actions;
 mod config;
@@ -17,15 +17,15 @@ use crate::betty_blocks::auth::jwt::validate_token;
 struct Component;
 
 impl McpHandler for Component {
-    fn mcp_handle(
+    fn handle(
         request: crate::wasi::http::types::IncomingRequest,
         response_out: crate::wasi::http::types::ResponseOutparam,
     ) {
-        handle_request(request, response_out);
+        inner_handle(request, response_out);
     }
 }
 
-fn handle_request(
+fn inner_handle(
     request: crate::wasi::http::types::IncomingRequest,
     response_out: crate::wasi::http::types::ResponseOutparam,
 ) {
