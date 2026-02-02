@@ -1,81 +1,36 @@
 use crate::types::{McpServerConfig, McpServersConfig};
 use crate::wasi::config::store::get_all;
 
-/// Check if a server ID exists in the configuration
-pub fn check_server_id_exists(server_id: &str) -> Result<(), String> {
-    eprintln!(
-        "Checking if server ID '{}' exists in configuration",
-        server_id
-    );
-
-    match get_all() {
-        Ok(config) => {
-            eprintln!("Runtime configuration keys available:");
-            for (key, value) in config.iter() {
-                eprintln!("Config key: {} = {}", key, value);
-            }
-
-            if config.is_empty() {
-                eprintln!("No runtime configuration keys found");
-            }
-
-            // Try to load the servers config and check if server_id exists
-            let servers_config = load_all_servers_config_from_runtime(&config)?;
-
-            // Check if the server ID exists
-            let server_exists = servers_config
-                .mcp_servers
-                .iter()
-                .any(|server| server.id == server_id);
-
-            if server_exists {
-                eprintln!("Server ID '{}' found in configuration", server_id);
-                Ok(())
-            } else {
-                Err(format!(
-                    "MCP server '{}' not found in configuration",
-                    server_id
-                ))
-            }
-        }
-        Err(e) => {
-            eprintln!("Failed to retrieve runtime configuration: {:?}", e);
-            Err(format!("Failed to retrieve runtime configuration: {:?}", e))
-        }
-    }
-}
-
-/// Load server configuration for a specific MCP server ID
+/// Load and validate server configuration for a specific MCP server ID.
+/// This is the single entry point - combines existence check and config loading.
+/// Returns the full McpServerConfig if found, or an error if not.
 pub fn load_server_config(server_id: &str) -> Result<McpServerConfig, String> {
-    // Load all MCP servers configuration
-    let config = load_all_servers_config()?;
+    let servers_config = load_all_servers_config()?;
 
-    // Find the server with matching ID
-    config
+    servers_config
         .mcp_servers
         .into_iter()
         .find(|server| server.id == server_id)
         .ok_or_else(|| format!("MCP server '{}' not found in configuration", server_id))
 }
 
-/// Load all MCP servers from configuration
+/// Load all MCP servers from configuration (wasi:config with fallback to default)
 fn load_all_servers_config() -> Result<McpServersConfig, String> {
     // Try to load from wasi:config first
-    match load_from_wasi_config() {
-        Some(config) => Ok(config),
-        None => {
-            // Fallback to hardcoded configuration for testing
-            load_default_config()
-        }
-    }
-}
-
-fn load_from_wasi_config() -> Option<McpServersConfig> {
     match get_all() {
-        Ok(config) => load_all_servers_config_from_runtime(&config).ok(),
+        Ok(runtime_config) => {
+            match load_all_servers_config_from_runtime(&runtime_config) {
+                Ok(config) => Ok(config),
+                Err(_) => {
+                    // Fallback to default if runtime config doesn't have mcp_servers
+                    eprintln!("[CONFIG] mcp_servers not found in runtime config, using defaults");
+                    load_default_config()
+                }
+            }
+        }
         Err(e) => {
-            eprintln!("Failed to get wasi config: {:?}", e);
-            None
+            eprintln!("[CONFIG] Failed to get wasi config: {:?}, using defaults", e);
+            load_default_config()
         }
     }
 }

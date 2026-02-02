@@ -61,19 +61,13 @@ fn handle_mcp_request(
         }
     };
 
-    // Step 2: Validate server ID exists in configuration
-    if let Err(e) = config::check_server_id_exists(&server_id) {
-        send_error_response(response_out, 404, e);
-        return;
-    }
-
-    // Step 3: Validate Content-Type as application/json
+    // Step 2: Validate Content-Type as application/json
     if let Err(e) = validate_content_type(&request) {
         send_error_response(response_out, 400, e);
         return;
     }
 
-    // Step 4: Authenticate request (JWT)
+    // Step 3: Authenticate request (JWT)
     let headers = request
         .headers()
         .entries()
@@ -81,12 +75,11 @@ fn handle_mcp_request(
         .map(|(k, v)| (k, String::from_utf8_lossy(&v).to_string()))
         .collect::<Vec<_>>();
     if validate_token(&headers).is_err() {
-        // `validate_token` belongs to betty-blocks:auth/jwt
         send_error_response(response_out, 401, "Unauthorized".to_string());
         return;
     }
 
-    // Step 5: Read request body
+    // Step 4: Read request body
     let body = match read_request_body(&request) {
         Ok(b) => b,
         Err(e) => {
@@ -95,7 +88,7 @@ fn handle_mcp_request(
         }
     };
 
-    // Step 6: Process MCP RPC request (includes JSON-RPC validation)
+    // Step 5: Process MCP RPC request (validates server_id + JSON-RPC in one call)
     match mcp::process_rpc(&server_id, &body) {
         Ok(result) => {
             // Serialize typed JsonrpcResponse into a string for the HTTP response

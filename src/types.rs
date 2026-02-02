@@ -30,7 +30,6 @@ pub struct McpServersConfig {
 #[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct ActionPayload {
-    pub action_id: String,
     pub arguments: Value,
 }
 

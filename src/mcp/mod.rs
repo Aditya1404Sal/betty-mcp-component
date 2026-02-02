@@ -9,6 +9,7 @@ use rust_mcp_schema::{
 use serde_json::{json, Value};
 
 pub fn process_rpc(server_id: &str, body: &str) -> Result<JsonrpcResponse, JsonrpcErrorResponse> {
+    // Parse JSON once
     let raw: Value = match serde_json::from_str(body) {
         Ok(v) => v,
         Err(e) => {
@@ -20,11 +21,13 @@ pub fn process_rpc(server_id: &str, body: &str) -> Result<JsonrpcResponse, Jsonr
         }
     };
 
-    // Also deserialize into the typed JsonrpcRequest for validation/dispatch
+    // Extract id once, early - used in all error responses
+    let id = raw.get("id").cloned();
+
+    // Deserialize into typed JsonrpcRequest for validation/dispatch
     let request: JsonrpcRequest = match serde_json::from_value(raw.clone()) {
         Ok(r) => r,
         Err(e) => {
-            let id = raw.get("id").cloned();
             return Err(make_error_response_or_fallback(
                 id,
                 -32600,
@@ -35,7 +38,6 @@ pub fn process_rpc(server_id: &str, body: &str) -> Result<JsonrpcResponse, Jsonr
 
     // Validate JSON-RPC version
     if request.jsonrpc() != JSONRPC_VERSION {
-        let id = raw.get("id").cloned();
         return Err(make_error_response_or_fallback(
             id,
             -32600,
@@ -43,15 +45,13 @@ pub fn process_rpc(server_id: &str, body: &str) -> Result<JsonrpcResponse, Jsonr
         ));
     }
 
-    // Extract params and id from the raw request value for handlers
+    // Extract params from the raw request value for handlers
     let params = raw.get("params").cloned().unwrap_or(json!({}));
-    let id = raw.get("id").cloned();
 
     // Load server configuration
     let server_config = match config::load_server_config(server_id) {
         Ok(cfg) => cfg,
         Err(e) => {
-            let id = raw.get("id").cloned();
             return Err(make_error_response_or_fallback(
                 id,
                 -32000,
@@ -166,15 +166,14 @@ fn handle_call_tool(params: &Value, server_config: &McpServerConfig) -> Result<V
     let action_result: ActionResponse =
         actions::execute_mapped_action(&tool_with_action.action_id, &args_value)?;
 
-    // WIP : ai generated this, need to figure out what the actual Action response will be
-    // parse_action_output func is extremely experimental, need the executor wit to connect the dots, currently assuming
-    // that the data is json
+    // Parse action output into MCP content blocks
     let content: Vec<ContentBlock> = actions::parse_action_output(&action_result)?;
-    // Create tool call result
+    
+    // Create tool call result - reflect actual success/failure status
     let result = CallToolResult {
         content,
         structured_content: None,
-        is_error: Some(false),
+        is_error: Some(!action_result.success),
         meta: None,
     };
 
